@@ -54,11 +54,56 @@ const HIGH = [
 ];
 const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
 
+// ── Sound (synthesized, no audio files needed) ──
+let _actx: AudioContext | null = null;
+function actx(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+  try {
+    if (!_actx) _actx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    if (_actx.state === "suspended") _actx.resume();
+    return _actx;
+  } catch { return null; }
+}
+function beep(freq: number, start: number, dur: number, type: OscillatorType = "sine", vol = 0.18) {
+  const ctx = actx(); if (!ctx) return;
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, ctx.currentTime + start);
+  g.gain.setValueAtTime(0, ctx.currentTime + start);
+  g.gain.linearRampToValueAtTime(vol, ctx.currentTime + start + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
+  o.connect(g); g.connect(ctx.destination);
+  o.start(ctx.currentTime + start); o.stop(ctx.currentTime + start + dur + 0.02);
+}
+function slideTone(f1: number, f2: number, start: number, dur: number, type: OscillatorType = "sawtooth", vol = 0.16) {
+  const ctx = actx(); if (!ctx) return;
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f1, ctx.currentTime + start);
+  o.frequency.exponentialRampToValueAtTime(Math.max(1, f2), ctx.currentTime + start + dur);
+  g.gain.setValueAtTime(vol, ctx.currentTime + start);
+  g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
+  o.connect(g); g.connect(ctx.destination);
+  o.start(ctx.currentTime + start); o.stop(ctx.currentTime + start + dur + 0.02);
+}
+function playCorrect() {
+  // bright ascending confetti-ish sparkle
+  beep(784, 0, 0.12, "triangle", 0.2);      // G5
+  beep(1046, 0.09, 0.12, "triangle", 0.2);  // C6
+  beep(1318, 0.18, 0.18, "triangle", 0.2);  // E6
+  beep(1567, 0.27, 0.22, "sine", 0.16);     // G6 sparkle
+}
+function playWrong() {
+  // womp-womp descending
+  slideTone(300, 200, 0, 0.22, "sawtooth", 0.16);
+  slideTone(220, 140, 0.24, 0.34, "sawtooth", 0.16);
+}
+
 const LS = {
   get(): number[] { try { return JSON.parse(localStorage.getItem("a320_bm") || "[]"); } catch { return []; } },
   set(ids: number[]) { try { localStorage.setItem("a320_bm", JSON.stringify(ids)); } catch {} },
 };
 
+type LoggedAnswer = { qid: number; chapter: string; question: string; options: string[]; correct: number | null; chosen: number | null };
 type LogEntry = {
   date: string;      // ISO
   mode: string;
@@ -66,6 +111,7 @@ type LogEntry = {
   correct: number;
   answered: number;
   total: number;
+  answers?: LoggedAnswer[]; // full detail for review
 };
 const LOG = {
   get(): LogEntry[] { try { return JSON.parse(localStorage.getItem("a320_log") || "[]"); } catch { return []; } },
@@ -79,7 +125,7 @@ const LOG = {
   clear() { try { localStorage.removeItem("a320_log"); } catch {} },
 };
 
-type Screen = "home" | "quiz" | "results" | "review" | "flightlog";
+type Screen = "home" | "quiz" | "results" | "review" | "flightlog" | "logreview";
 type Mode = "practice" | "exam" | "bookmarks";
 type Answer = { q: Question; chosen: number | null; isCorrect: boolean };
 
@@ -96,6 +142,7 @@ export default function App() {
   const [bm, setBm] = useState<number[]>([]);
   const [reviewFilter, setReviewFilter] = useState<"all" | "wrong" | "correct">("all");
   const [flash, setFlash] = useState<string>("");
+  const [logReview, setLogReview] = useState<{ answers: any[]; title: string } | null>(null);
 
   useEffect(() => { setBm(LS.get()); }, []);
 
@@ -147,13 +194,15 @@ export default function App() {
         correct,
         answered,
         total: na.length,
+        answers: na.map((a) => ({ qid: a.q.id, chapter: a.q.chapter, question: a.q.question, options: a.q.options, correct: a.q.correct, chosen: a.chosen })),
       });
       setScreen("results");
     }
   }, [currentQ, chosen, answers, idx, quiz.length, mode]);
 
   if (screen === "home") return <Home {...{ selectedChapters, setSelectedChapters, examSize, setExamSize, chapterCounts, filteredCount: filtered.length, bmCount: bm.length, start, openLog: () => setScreen("flightlog") }} />;
-  if (screen === "flightlog") return <FlightLog back={() => setScreen("home")} />;
+  if (screen === "flightlog") return <FlightLog back={() => setScreen("home")} openReview={(answers: any[], title: string) => { setLogReview({ answers, title }); setReviewFilter("all"); setScreen("logreview"); }} />;
+  if (screen === "logreview" && logReview) return <Review {...{ answers: logReview.answers, filter: reviewFilter, setFilter: setReviewFilter, bm, toggleBm, back: () => setScreen("flightlog"), title: logReview.title }} />;
   if (screen === "quiz" && currentQ) return <Quiz {...{ q: currentQ, idx, total: quiz.length, chosen, revealed, mode, flash, bookmarked: bm.includes(currentQ.id), onChoose, next, home: () => setScreen("home"), toggleBm: () => toggleBm(currentQ.id) }} />;
   if (screen === "results") return <Results {...{ answers, mode, review: () => { setReviewFilter("all"); setScreen("review"); }, home: () => setScreen("home"), retry: () => start(mode) }} />;
   if (screen === "review") return <Review {...{ answers, filter: reviewFilter, setFilter: setReviewFilter, bm, toggleBm, back: () => setScreen("results") }} />;
@@ -190,10 +239,13 @@ function Home({ selectedChapters, setSelectedChapters, examSize, setExamSize, ch
       <div style={{ padding: "18px 16px 0" }}>
         <div style={{ background: C.card, borderRadius: 14, padding: 4, display: "flex", marginBottom: 14, border: `1px solid ${C.cardBorder}` }}>
           {(["practice", "exam"] as const).map((m) => (
-            <button key={m} onClick={() => setTab(m)} style={{ flex: 1, padding: "11px 0", border: "none", borderRadius: 11, cursor: "pointer", fontSize: 14, fontWeight: 800, background: tab === m ? `linear-gradient(135deg,${C.accent},${C.accentDeep})` : "transparent", color: tab === m ? "#fff" : C.textMuted }}>
+            <button key={m} onClick={() => setTab(m)} style={{ flex: 1, padding: "11px 0", border: "none", borderRadius: 11, cursor: "pointer", fontSize: 13, fontWeight: 800, background: tab === m ? `linear-gradient(135deg,${C.accent},${C.accentDeep})` : "transparent", color: tab === m ? "#fff" : C.textMuted }}>
               {m === "practice" ? "📖 Practice" : "📝 Check Ride"}
             </button>
           ))}
+          <button onClick={openLog} style={{ flex: 1, padding: "11px 0", border: "none", borderRadius: 11, cursor: "pointer", fontSize: 13, fontWeight: 800, background: "transparent", color: C.textMuted }}>
+            🛩️ Flight Log
+          </button>
         </div>
         <p style={{ fontSize: 12, color: C.textMuted, margin: "0 4px 14px", lineHeight: 1.5 }}>
           {tab === "practice" ? "Instant feedback after every question — with a cheer or a nudge 💜" : "Fly a set number of questions, then get your score & landing verdict."}
@@ -233,7 +285,6 @@ function Home({ selectedChapters, setSelectedChapters, examSize, setExamSize, ch
           🛫 Start flight — {filteredCount} Qs
         </button>
         <button onClick={() => start("bookmarks")} disabled={!bmCount} style={{ width: "100%", padding: "13px 0", borderRadius: 12, marginTop: 10, border: `1px solid ${bmCount ? C.gold : C.cardBorder}`, background: "transparent", color: bmCount ? C.gold : C.neutral, fontSize: 14, fontWeight: 800, cursor: bmCount ? "pointer" : "default" }}>★ Flagged for review ({bmCount})</button>
-        <button onClick={openLog} style={{ width: "100%", padding: "13px 0", borderRadius: 12, marginTop: 10, border: `1px solid ${C.cardBorder}`, background: "transparent", color: C.accentLight, fontSize: 14, fontWeight: 800, cursor: "pointer" }}>🛩️ Flight log</button>
       </div>
     </div>
   );
@@ -253,31 +304,43 @@ function StickerImg({ name, glow, fallbackEmoji, width, maxHeight, rotate }: { n
   );
 }
 
-// ─────────────────── PHOTO POPUP (sticker) ───────────────────
-function PhotoPopup({ name, msg, correct, onClose }: { name: string; msg: string; correct: boolean; onClose: () => void }) {
+// ─────────────────── STICKER TOAST (corner, non-blocking) ───────────────────
+function StickerToast({ name, msg, correct, onClose }: { name: string; msg: string; correct: boolean; onClose: () => void }) {
+  const [leaving, setLeaving] = useState(false);
+
   useEffect(() => {
-    const t = setTimeout(onClose, 2200); // auto-dismiss
-    return () => clearTimeout(t);
-  }, [onClose]);
+    correct ? playCorrect() : playWrong();
+    const t1 = setTimeout(() => setLeaving(true), 2400); // begin exit
+    const t2 = setTimeout(onClose, 2800);                // unmount after exit anim
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [correct, onClose]);
+
+  const ring = correct ? C.correct : C.wrong;
+  const glow = correct ? "rgba(52,211,153,0.6)" : "rgba(251,113,133,0.6)";
+
   return (
-    <div onClick={onClose} style={{
-      position: "fixed", inset: 0, zIndex: 100,
-      background: "rgba(10,4,20,0.72)", backdropFilter: "blur(4px)",
-      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-      animation: "fadein 0.2s ease",
-    }}>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, animation: "sticker 0.42s cubic-bezier(0.34,1.56,0.64,1)" }}>
-        <StickerImg name={name} glow={correct ? "rgba(52,211,153,0.75)" : "rgba(251,113,133,0.75)"} fallbackEmoji={correct ? "🎉" : "🔄"} width={230} maxHeight={260} rotate={-3} />
-        <div style={{
-          background: correct ? C.correct : C.wrong, color: correct ? "#06281c" : "#3f0a15",
-          padding: "12px 22px", borderRadius: 999, fontSize: 17, fontWeight: 900, maxWidth: 320, textAlign: "center", lineHeight: 1.3,
-          boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
-        }}>{msg}</div>
-        <span style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>tap to continue</span>
+    <div
+      onClick={() => { setLeaving(true); setTimeout(onClose, 300); }}
+      style={{
+        position: "fixed", left: 0, right: 0, bottom: 92, zIndex: 100,
+        display: "flex", justifyContent: "center", pointerEvents: "auto",
+        animation: leaving ? "toastOut 0.32s ease forwards" : "toastIn 0.5s cubic-bezier(0.34,1.56,0.64,1)",
+      }}
+    >
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12,
+        background: "rgba(33,20,54,0.92)", backdropFilter: "blur(8px)",
+        border: `1.5px solid ${ring}`, borderRadius: 18, padding: "10px 16px 10px 10px",
+        boxShadow: `0 8px 28px rgba(0,0,0,0.45), 0 0 22px ${glow}`, maxWidth: 340,
+      }}>
+        <div style={{ filter: `drop-shadow(0 0 8px ${glow})`, flexShrink: 0 }}>
+          <StickerImg name={name} glow={glow} fallbackEmoji={correct ? "🎉" : "🔄"} width={70} maxHeight={84} rotate={-4} />
+        </div>
+        <span style={{ fontSize: 15, fontWeight: 800, color: correct ? "#a7f3d0" : "#fecdd3", lineHeight: 1.3 }}>{msg}</span>
       </div>
       <style>{`
-        @keyframes fadein{from{opacity:0}to{opacity:1}}
-        @keyframes sticker{0%{transform:scale(0.4) rotate(8deg);opacity:0}60%{transform:scale(1.08) rotate(-4deg)}100%{transform:scale(1) rotate(0);opacity:1}}
+        @keyframes toastIn{0%{transform:translateY(60px) scale(0.85);opacity:0}100%{transform:translateY(0) scale(1);opacity:1}}
+        @keyframes toastOut{0%{transform:translateY(0);opacity:1}100%{transform:translateY(24px);opacity:0}}
       `}</style>
     </div>
   );
@@ -299,7 +362,7 @@ function Quiz({ q, idx, total, chosen, revealed, mode, flash, bookmarked, onChoo
 
   return (
     <div style={{ minHeight: "100vh", background: `radial-gradient(120% 50% at 50% 0%, ${C.bg2}, ${C.bg})`, color: C.text, display: "flex", flexDirection: "column" }}>
-      {showPopup && <PhotoPopup name={wasCorrect ? "affirm" : "notit"} msg={flash} correct={wasCorrect} onClose={() => setShowPopup(false)} />}
+      {showPopup && <StickerToast name={wasCorrect ? "affirm" : "notit"} msg={flash} correct={wasCorrect} onClose={() => setShowPopup(false)} />}
       <div style={{ padding: "12px 16px 10px", background: C.card, borderBottom: `1px solid ${C.cardBorder}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <button onClick={home} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 26, cursor: "pointer", lineHeight: 1 }}>‹</button>
@@ -361,6 +424,8 @@ function Results({ answers, mode, review, home, retry }: any) {
   const heroName = pass ? "zorro" : "disappoint";
   const heroMsg = pass ? pick(HIGH) : pick(LOW);
 
+  useEffect(() => { pass ? playCorrect() : playWrong(); }, [pass]);
+
   const byCh: Record<string, { total: number; correct: number }> = {};
   answers.forEach((a: Answer) => { if (!byCh[a.q.chapter]) byCh[a.q.chapter] = { total: 0, correct: 0 }; byCh[a.q.chapter].total++; if (a.isCorrect) byCh[a.q.chapter].correct++; });
 
@@ -415,14 +480,23 @@ function Stat({ label, value, color }: any) {
 
 
 // ─────────────────── REVIEW ───────────────────
-function Review({ answers, filter, setFilter, bm, toggleBm, back }: any) {
+// Accepts either live Answer[] (with .q) or stored LoggedAnswer[] (flat).
+type NormAns = { id: number; chapter: string; question: string; options: string[]; correct: number | null; chosen: number | null; isCorrect: boolean };
+function normalizeAnswers(answers: any[]): NormAns[] {
+  return (answers || []).map((a: any) => {
+    if (a.q) return { id: a.q.id, chapter: a.q.chapter, question: a.q.question, options: a.q.options, correct: a.q.correct, chosen: a.chosen, isCorrect: a.isCorrect };
+    return { id: a.qid, chapter: a.chapter, question: a.question, options: a.options, correct: a.correct, chosen: a.chosen, isCorrect: a.chosen !== null && a.chosen === a.correct };
+  });
+}
+function Review({ answers, filter, setFilter, bm, toggleBm, back, title }: any) {
   const letters = "ABCDEF";
-  const list = answers.filter((a: Answer) => filter === "all" ? true : filter === "correct" ? a.isCorrect : !a.isCorrect);
+  const norm = normalizeAnswers(answers);
+  const list = norm.filter((a) => filter === "all" ? true : filter === "correct" ? a.isCorrect : !a.isCorrect);
   return (
     <div style={{ minHeight: "100vh", background: `radial-gradient(120% 50% at 50% 0%, ${C.bg2}, ${C.bg})`, color: C.text, paddingBottom: 40 }}>
       <div style={{ background: C.card, padding: "12px 16px", borderBottom: `1px solid ${C.cardBorder}`, display: "flex", alignItems: "center", gap: 12 }}>
         <button onClick={back} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 26, cursor: "pointer" }}>‹</button>
-        <span style={{ fontSize: 16, fontWeight: 800 }}>Debrief</span>
+        <span style={{ fontSize: 16, fontWeight: 800 }}>{title || "Debrief"}</span>
       </div>
       <div style={{ display: "flex", gap: 6, padding: "12px 16px 8px" }}>
         {(["all", "correct", "wrong"] as const).map((f) => (
@@ -430,23 +504,23 @@ function Review({ answers, filter, setFilter, bm, toggleBm, back }: any) {
         ))}
       </div>
       <div style={{ padding: "0 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-        {list.map((a: Answer, i: number) => (
+        {list.map((a, i) => (
           <div key={i} style={{ background: C.card, borderRadius: 14, border: `1px solid ${C.cardBorder}`, overflow: "hidden" }}>
             <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.cardBorder}`, display: "flex", gap: 10, justifyContent: "space-between" }}>
               <div>
-                <div style={{ fontSize: 11, color: C.accentLight, marginBottom: 4 }}>{a.q.chapter}</div>
-                <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>{a.q.question}</p>
+                <div style={{ fontSize: 11, color: C.accentLight, marginBottom: 4 }}>{a.chapter}</div>
+                <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>{a.question}</p>
               </div>
-              <button onClick={() => toggleBm(a.q.id)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: bm.includes(a.q.id) ? C.gold : C.neutral, flexShrink: 0 }}>{bm.includes(a.q.id) ? "★" : "☆"}</button>
+              <button onClick={() => toggleBm(a.id)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: bm.includes(a.id) ? C.gold : C.neutral, flexShrink: 0 }}>{bm.includes(a.id) ? "★" : "☆"}</button>
             </div>
             <div style={{ padding: "10px 14px" }}>
-              {a.q.options.map((opt: string, oi: number) => {
-                const isCorr = a.q.correct === oi, isCh = a.chosen === oi;
+              {a.options.map((opt: string, oi: number) => {
+                const isCorr = a.correct === oi, isCh = a.chosen === oi;
                 let bg = "transparent", bd = "transparent", col = C.textMuted;
                 if (isCorr) { bg = C.correctBg; bd = C.correct; col = "#a7f3d0"; }
                 else if (isCh) { bg = C.wrongBg; bd = C.wrong; col = "#fecdd3"; }
                 return (
-                  <div key={oi} style={{ padding: "7px 10px", borderRadius: 8, marginBottom: oi < a.q.options.length - 1 ? 6 : 0, background: bg, border: `1px solid ${bd}`, fontSize: 13, color: col, display: "flex", gap: 8 }}>
+                  <div key={oi} style={{ padding: "7px 10px", borderRadius: 8, marginBottom: oi < a.options.length - 1 ? 6 : 0, background: bg, border: `1px solid ${bd}`, fontSize: 13, color: col, display: "flex", gap: 8 }}>
                     <span style={{ fontWeight: 900, flexShrink: 0 }}>{isCorr ? "✓" : isCh ? "✕" : letters[oi]}</span>
                     {opt.replace(/^[A-F][.)]\s*/, "")}
                   </div>
@@ -463,7 +537,7 @@ function Review({ answers, filter, setFilter, bm, toggleBm, back }: any) {
 }
 
 // ─────────────────── FLIGHT LOG (history) ───────────────────
-function FlightLog({ back }: { back: () => void }) {
+function FlightLog({ back, openReview }: { back: () => void; openReview: (answers: any[], title: string) => void }) {
   const [log, setLog] = useState<LogEntry[]>([]);
   useEffect(() => { setLog(LOG.get()); }, []);
 
@@ -502,17 +576,21 @@ function FlightLog({ back }: { back: () => void }) {
           <div style={{ padding: "8px 16px 0", display: "flex", flexDirection: "column", gap: 10 }}>
             {log.map((e, i) => {
               const col = e.score >= 75 ? C.correct : e.score >= 50 ? C.gold : C.wrong;
+              const reviewable = !!(e.answers && e.answers.length);
               return (
-                <div key={i} style={{ background: C.card, borderRadius: 13, border: `1px solid ${C.cardBorder}`, padding: "13px 15px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div key={i} onClick={() => reviewable && openReview(e.answers!, fmt(e.date) + " · " + e.score + "%")} style={{ background: C.card, borderRadius: 13, border: `1px solid ${C.cardBorder}`, padding: "13px 15px", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: reviewable ? "pointer" : "default" }}>
                   <div>
                     <div style={{ fontSize: 14, fontWeight: 700 }}>{fmt(e.date)}</div>
-                    <div style={{ fontSize: 12, color: C.textMuted, marginTop: 3 }}>{modeLabel(e.mode)} · {e.correct}/{e.answered} correct</div>
+                    <div style={{ fontSize: 12, color: C.textMuted, marginTop: 3 }}>{modeLabel(e.mode)} · {e.correct}/{e.answered} correct{reviewable ? " · tap to review" : ""}</div>
                   </div>
-                  <div style={{ fontSize: 26, fontWeight: 900, color: col }}>{e.score}%</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ fontSize: 26, fontWeight: 900, color: col }}>{e.score}%</div>
+                    {reviewable && <span style={{ color: C.textMuted, fontSize: 20 }}>›</span>}
+                  </div>
                 </div>
               );
             })}
-                  </div>
+          </div>
         </>
       )}
     </div>
