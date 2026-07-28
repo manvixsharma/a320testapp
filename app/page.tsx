@@ -54,50 +54,6 @@ const HIGH = [
 ];
 const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
 
-// ── Sound (synthesized, no audio files needed) ──
-let _actx: AudioContext | null = null;
-function actx(): AudioContext | null {
-  if (typeof window === "undefined") return null;
-  try {
-    if (!_actx) _actx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    if (_actx.state === "suspended") _actx.resume();
-    return _actx;
-  } catch { return null; }
-}
-function beep(freq: number, start: number, dur: number, type: OscillatorType = "sine", vol = 0.18) {
-  const ctx = actx(); if (!ctx) return;
-  const o = ctx.createOscillator(), g = ctx.createGain();
-  o.type = type; o.frequency.setValueAtTime(freq, ctx.currentTime + start);
-  g.gain.setValueAtTime(0, ctx.currentTime + start);
-  g.gain.linearRampToValueAtTime(vol, ctx.currentTime + start + 0.02);
-  g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
-  o.connect(g); g.connect(ctx.destination);
-  o.start(ctx.currentTime + start); o.stop(ctx.currentTime + start + dur + 0.02);
-}
-function slideTone(f1: number, f2: number, start: number, dur: number, type: OscillatorType = "sawtooth", vol = 0.16) {
-  const ctx = actx(); if (!ctx) return;
-  const o = ctx.createOscillator(), g = ctx.createGain();
-  o.type = type;
-  o.frequency.setValueAtTime(f1, ctx.currentTime + start);
-  o.frequency.exponentialRampToValueAtTime(Math.max(1, f2), ctx.currentTime + start + dur);
-  g.gain.setValueAtTime(vol, ctx.currentTime + start);
-  g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
-  o.connect(g); g.connect(ctx.destination);
-  o.start(ctx.currentTime + start); o.stop(ctx.currentTime + start + dur + 0.02);
-}
-function playCorrect() {
-  // bright ascending confetti-ish sparkle
-  beep(784, 0, 0.12, "triangle", 0.2);      // G5
-  beep(1046, 0.09, 0.12, "triangle", 0.2);  // C6
-  beep(1318, 0.18, 0.18, "triangle", 0.2);  // E6
-  beep(1567, 0.27, 0.22, "sine", 0.16);     // G6 sparkle
-}
-function playWrong() {
-  // womp-womp descending
-  slideTone(300, 200, 0, 0.22, "sawtooth", 0.16);
-  slideTone(220, 140, 0.24, 0.34, "sawtooth", 0.16);
-}
-
 const LS = {
   get(): number[] { try { return JSON.parse(localStorage.getItem("a320_bm") || "[]"); } catch { return []; } },
   set(ids: number[]) { try { localStorage.setItem("a320_bm", JSON.stringify(ids)); } catch {} },
@@ -304,12 +260,50 @@ function StickerImg({ name, glow, fallbackEmoji, width, maxHeight, rotate }: { n
   );
 }
 
+// ─────────────────── CONFETTI BURST ───────────────────
+function Confetti() {
+  const colors = ["#a855f7", "#34d399", "#fbbf24", "#fb7185", "#4a9eff", "#c896ff"];
+  const pieces = Array.from({ length: 80 }, (_, i) => {
+    const angle = Math.random() * Math.PI - Math.PI / 2;      // upward-ish spread
+    const dist = 140 + Math.random() * 220;
+    const dx = Math.cos(angle) * dist * (Math.random() < 0.5 ? -1 : 1);
+    const dy = -Math.abs(Math.sin(angle) * dist) - 80;        // burst up
+    const rot = (Math.random() * 720 - 360) + "deg";
+    const delay = Math.random() * 0.06;
+    const size = 6 + Math.random() * 8;
+    const color = colors[i % colors.length];
+    const round = Math.random() < 0.4;
+    return { dx, dy, rot, delay, size, color, round, key: i };
+  });
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 99, pointerEvents: "none", overflow: "hidden" }}>
+      <div style={{ position: "absolute", left: "50%", top: "62%" }}>
+        {pieces.map((p) => (
+          <span key={p.key} style={{
+            position: "absolute", width: p.size, height: p.round ? p.size : p.size * 0.5,
+            background: p.color, borderRadius: p.round ? "50%" : 2,
+            ["--dx" as any]: `${p.dx}px`, ["--dy" as any]: `${p.dy}px`, ["--rot" as any]: p.rot,
+            animation: `confetti 1.5s cubic-bezier(0.15,0.6,0.4,1) ${p.delay}s forwards`,
+            opacity: 0,
+          }} />
+        ))}
+      </div>
+      <style>{`
+        @keyframes confetti {
+          0% { transform: translate(0,0) rotate(0); opacity: 1; }
+          15% { opacity: 1; }
+          100% { transform: translate(var(--dx), calc(var(--dy) + 320px)) rotate(var(--rot)); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 // ─────────────────── STICKER TOAST (corner, non-blocking) ───────────────────
 function StickerToast({ name, msg, correct, onClose }: { name: string; msg: string; correct: boolean; onClose: () => void }) {
   const [leaving, setLeaving] = useState(false);
 
   useEffect(() => {
-    correct ? playCorrect() : playWrong();
     const t1 = setTimeout(() => setLeaving(true), 2400); // begin exit
     const t2 = setTimeout(onClose, 2800);                // unmount after exit anim
     return () => { clearTimeout(t1); clearTimeout(t2); };
@@ -319,6 +313,8 @@ function StickerToast({ name, msg, correct, onClose }: { name: string; msg: stri
   const glow = correct ? "rgba(52,211,153,0.6)" : "rgba(251,113,133,0.6)";
 
   return (
+    <>
+    {correct && <Confetti />}
     <div
       onClick={() => { setLeaving(true); setTimeout(onClose, 300); }}
       style={{
@@ -343,6 +339,7 @@ function StickerToast({ name, msg, correct, onClose }: { name: string; msg: stri
         @keyframes toastOut{0%{transform:translateY(0);opacity:1}100%{transform:translateY(24px);opacity:0}}
       `}</style>
     </div>
+    </>
   );
 }
 
@@ -423,8 +420,6 @@ function Results({ answers, mode, review, home, retry }: any) {
   const pass = pct >= 75;
   const heroName = pass ? "zorro" : "disappoint";
   const heroMsg = pass ? pick(HIGH) : pick(LOW);
-
-  useEffect(() => { pass ? playCorrect() : playWrong(); }, [pass]);
 
   const byCh: Record<string, { total: number; correct: number }> = {};
   answers.forEach((a: Answer) => { if (!byCh[a.q.chapter]) byCh[a.q.chapter] = { total: 0, correct: 0 }; byCh[a.q.chapter].total++; if (a.isCorrect) byCh[a.q.chapter].correct++; });
