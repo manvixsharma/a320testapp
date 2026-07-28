@@ -1,9 +1,16 @@
 import type { Metadata, Viewport } from "next";
 
 export const metadata: Metadata = {
-  title: "A320 MCQ Trainer",
-  description: "A320 Technical Systems — Multiple Choice Questions",
+  title: "A320 Flight Deck ✈️",
+  description: "Captain Ayesha's A320 ground school",
   manifest: "/manifest.json",
+  icons: {
+    icon: [
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
@@ -19,12 +26,5 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <meta name="apple-mobile-web-app-title" content="A320 MCQ" />
-        <link rel="apple-touch-icon" href="/icon-192.png" />
-      </head>
-      <body style={{ margin: 0, padding: 0, fontFamily: "'Inter', -apple-system, sans-serif", background: "#12091f" }}>
-        {children}
-      </body>
-    </html>
-  );
-}
+        <meta name="apple-mobile-web-app-title" content="A320 Deck" />
+        <link rel="apple-touch-icon" href="/app

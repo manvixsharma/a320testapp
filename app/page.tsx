@@ -59,7 +59,27 @@ const LS = {
   set(ids: number[]) { try { localStorage.setItem("a320_bm", JSON.stringify(ids)); } catch {} },
 };
 
-type Screen = "home" | "quiz" | "results" | "review";
+type LogEntry = {
+  date: string;      // ISO
+  mode: string;
+  score: number;     // %
+  correct: number;
+  answered: number;
+  total: number;
+};
+const LOG = {
+  get(): LogEntry[] { try { return JSON.parse(localStorage.getItem("a320_log") || "[]"); } catch { return []; } },
+  add(e: LogEntry) {
+    try {
+      const cur = LOG.get();
+      cur.unshift(e);                       // newest first
+      localStorage.setItem("a320_log", JSON.stringify(cur.slice(0, 100))); // keep last 100
+    } catch {}
+  },
+  clear() { try { localStorage.removeItem("a320_log"); } catch {} },
+};
+
+type Screen = "home" | "quiz" | "results" | "review" | "flightlog";
 type Mode = "practice" | "exam" | "bookmarks";
 type Answer = { q: Question; chosen: number | null; isCorrect: boolean };
 
@@ -116,10 +136,24 @@ export default function App() {
     const na = [...answers, { q: currentQ, chosen, isCorrect }];
     setAnswers(na);
     if (idx + 1 < quiz.length) { setIdx(idx + 1); setChosen(null); setRevealed(false); setFlash(""); }
-    else setScreen("results");
-  }, [currentQ, chosen, answers, idx, quiz.length]);
+    else {
+      // Save this session to the flight log
+      const answered = na.filter((a) => a.chosen !== null).length;
+      const correct = na.filter((a) => a.isCorrect).length;
+      LOG.add({
+        date: new Date().toISOString(),
+        mode,
+        score: answered ? Math.round((correct / answered) * 100) : 0,
+        correct,
+        answered,
+        total: na.length,
+      });
+      setScreen("results");
+    }
+  }, [currentQ, chosen, answers, idx, quiz.length, mode]);
 
-  if (screen === "home") return <Home {...{ selectedChapters, setSelectedChapters, examSize, setExamSize, chapterCounts, filteredCount: filtered.length, bmCount: bm.length, start }} />;
+  if (screen === "home") return <Home {...{ selectedChapters, setSelectedChapters, examSize, setExamSize, chapterCounts, filteredCount: filtered.length, bmCount: bm.length, start, openLog: () => setScreen("flightlog") }} />;
+  if (screen === "flightlog") return <FlightLog back={() => setScreen("home")} />;
   if (screen === "quiz" && currentQ) return <Quiz {...{ q: currentQ, idx, total: quiz.length, chosen, revealed, mode, flash, bookmarked: bm.includes(currentQ.id), onChoose, next, home: () => setScreen("home"), toggleBm: () => toggleBm(currentQ.id) }} />;
   if (screen === "results") return <Results {...{ answers, mode, review: () => { setReviewFilter("all"); setScreen("review"); }, home: () => setScreen("home"), retry: () => start(mode) }} />;
   if (screen === "review") return <Review {...{ answers, filter: reviewFilter, setFilter: setReviewFilter, bm, toggleBm, back: () => setScreen("results") }} />;
@@ -138,7 +172,7 @@ function WingRule() {
 }
 
 // ─────────────────── HOME ───────────────────
-function Home({ selectedChapters, setSelectedChapters, examSize, setExamSize, chapterCounts, filteredCount, bmCount, start }: any) {
+function Home({ selectedChapters, setSelectedChapters, examSize, setExamSize, chapterCounts, filteredCount, bmCount, start, openLog }: any) {
   const [tab, setTab] = useState<"practice" | "exam">("practice");
   const toggle = (ch: string) => { const n = new Set<string>(selectedChapters); n.has(ch) ? n.delete(ch) : n.add(ch); setSelectedChapters(n); };
   const allSel = selectedChapters.size === 0;
@@ -199,23 +233,52 @@ function Home({ selectedChapters, setSelectedChapters, examSize, setExamSize, ch
           🛫 Start flight — {filteredCount} Qs
         </button>
         <button onClick={() => start("bookmarks")} disabled={!bmCount} style={{ width: "100%", padding: "13px 0", borderRadius: 12, marginTop: 10, border: `1px solid ${bmCount ? C.gold : C.cardBorder}`, background: "transparent", color: bmCount ? C.gold : C.neutral, fontSize: 14, fontWeight: 800, cursor: bmCount ? "pointer" : "default" }}>★ Flagged for review ({bmCount})</button>
+        <button onClick={openLog} style={{ width: "100%", padding: "13px 0", borderRadius: 12, marginTop: 10, border: `1px solid ${C.cardBorder}`, background: "transparent", color: C.accentLight, fontSize: 14, fontWeight: 800, cursor: "pointer" }}>🛩️ Flight log</button>
       </div>
     </div>
   );
 }
 
-// ─────────────────── PHOTO FLASH ───────────────────
-function PhotoFlash({ src, msg, correct }: { src: string; msg: string; correct: boolean }) {
-  const [imgOk, setImgOk] = useState(true);
+// Sticker image: tries /name.png first, falls back to /name.jpg, then emoji.
+function StickerImg({ name, glow, fallbackEmoji, width, maxHeight, rotate }: { name: string; glow: string; fallbackEmoji: string; width: number; maxHeight: number; rotate: number }) {
+  const [stage, setStage] = useState(0); // 0=png, 1=jpg, 2=emoji
+  const src = stage === 0 ? `/${name}.png` : `/${name}.jpg`;
+  if (stage >= 2) return <div style={{ fontSize: width * 0.55, filter: "drop-shadow(0 8px 20px rgba(0,0,0,0.5))" }}>{fallbackEmoji}</div>;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", marginBottom: 12, borderRadius: 14, background: correct ? C.correctBg : C.wrongBg, border: `1.5px solid ${correct ? C.correct : C.wrong}`, animation: "pop 0.3s ease" }}>
-      {imgOk ? (
-        <img src={src} onError={() => setImgOk(false)} alt="" style={{ width: 52, height: 52, borderRadius: 12, objectFit: "cover", flexShrink: 0, border: `2px solid ${correct ? C.correct : C.wrong}` }} />
-      ) : (
-        <div style={{ width: 52, height: 52, borderRadius: 12, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, background: C.optionBg }}>{correct ? "🎉" : "🔄"}</div>
-      )}
-      <span style={{ fontSize: 14, fontWeight: 700, color: correct ? "#a7f3d0" : "#fecdd3", lineHeight: 1.35 }}>{msg}</span>
-      <style>{`@keyframes pop{0%{transform:scale(0.9);opacity:0}100%{transform:scale(1);opacity:1}}`}</style>
+    <img src={src} onError={() => setStage((s) => s + 1)} alt="" style={{
+      width, maxHeight, objectFit: "contain",
+      filter: `drop-shadow(0 0 14px ${glow}) drop-shadow(0 10px 22px rgba(0,0,0,0.55))`,
+      transform: `rotate(${rotate}deg)`,
+    }} />
+  );
+}
+
+// ─────────────────── PHOTO POPUP (sticker) ───────────────────
+function PhotoPopup({ name, msg, correct, onClose }: { name: string; msg: string; correct: boolean; onClose: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 2200); // auto-dismiss
+    return () => clearTimeout(t);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 100,
+      background: "rgba(10,4,20,0.72)", backdropFilter: "blur(4px)",
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      animation: "fadein 0.2s ease",
+    }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, animation: "sticker 0.42s cubic-bezier(0.34,1.56,0.64,1)" }}>
+        <StickerImg name={name} glow={correct ? "rgba(52,211,153,0.75)" : "rgba(251,113,133,0.75)"} fallbackEmoji={correct ? "🎉" : "🔄"} width={230} maxHeight={260} rotate={-3} />
+        <div style={{
+          background: correct ? C.correct : C.wrong, color: correct ? "#06281c" : "#3f0a15",
+          padding: "12px 22px", borderRadius: 999, fontSize: 17, fontWeight: 900, maxWidth: 320, textAlign: "center", lineHeight: 1.3,
+          boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
+        }}>{msg}</div>
+        <span style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>tap to continue</span>
+      </div>
+      <style>{`
+        @keyframes fadein{from{opacity:0}to{opacity:1}}
+        @keyframes sticker{0%{transform:scale(0.4) rotate(8deg);opacity:0}60%{transform:scale(1.08) rotate(-4deg)}100%{transform:scale(1) rotate(0);opacity:1}}
+      `}</style>
     </div>
   );
 }
@@ -227,9 +290,16 @@ function Quiz({ q, idx, total, chosen, revealed, mode, flash, bookmarked, onChoo
   const canAdvance = isPractice ? revealed : chosen !== null;
   const letters = "ABCDEF";
   const wasCorrect = chosen !== null && chosen === q.correct;
+  const [showPopup, setShowPopup] = useState(false);
+
+  // Show popup whenever a new flash message arrives (practice mode reveal)
+  useEffect(() => {
+    if (isPractice && revealed && flash) setShowPopup(true);
+  }, [flash, revealed, isPractice]);
 
   return (
     <div style={{ minHeight: "100vh", background: `radial-gradient(120% 50% at 50% 0%, ${C.bg2}, ${C.bg})`, color: C.text, display: "flex", flexDirection: "column" }}>
+      {showPopup && <PhotoPopup name={wasCorrect ? "affirm" : "notit"} msg={flash} correct={wasCorrect} onClose={() => setShowPopup(false)} />}
       <div style={{ padding: "12px 16px 10px", background: C.card, borderBottom: `1px solid ${C.cardBorder}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <button onClick={home} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 26, cursor: "pointer", lineHeight: 1 }}>‹</button>
@@ -245,8 +315,6 @@ function Quiz({ q, idx, total, chosen, revealed, mode, flash, bookmarked, onChoo
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px" }}>
-        {isPractice && revealed && flash && <PhotoFlash src={wasCorrect ? "/affirm.jpg" : "/notit.jpg"} msg={flash} correct={wasCorrect} />}
-
         <div style={{ background: C.card, borderRadius: 16, padding: 17, marginBottom: 14, border: `1px solid ${C.cardBorder}`, boxShadow: "0 4px 20px rgba(0,0,0,0.3)" }}>
           <p style={{ margin: 0, fontSize: 16, lineHeight: 1.55, fontWeight: 500 }}>{q.question}</p>
         </div>
@@ -290,8 +358,7 @@ function Results({ answers, mode, review, home, retry }: any) {
   const correct = answers.filter((a: Answer) => a.isCorrect).length;
   const pct = answered.length ? Math.round((correct / answered.length) * 100) : 0;
   const pass = pct >= 75;
-  const [imgOk, setImgOk] = useState(true);
-  const heroImg = pass ? "/zorro.jpg" : "/disappoint.jpg";
+  const heroName = pass ? "zorro" : "disappoint";
   const heroMsg = pass ? pick(HIGH) : pick(LOW);
 
   const byCh: Record<string, { total: number; correct: number }> = {};
@@ -300,11 +367,7 @@ function Results({ answers, mode, review, home, retry }: any) {
   return (
     <div style={{ minHeight: "100vh", background: `radial-gradient(120% 60% at 50% 0%, ${C.bg2}, ${C.bg})`, color: C.text, paddingBottom: 40 }}>
       <div style={{ padding: "28px 20px 20px", textAlign: "center" }}>
-        {imgOk ? (
-          <img src={heroImg} onError={() => setImgOk(false)} alt="" style={{ width: 132, height: 132, borderRadius: 24, objectFit: "cover", border: `3px solid ${pass ? C.correct : C.accent}`, boxShadow: `0 8px 30px ${pass ? "rgba(52,211,153,0.4)" : "rgba(168,85,247,0.4)"}` }} />
-        ) : (
-          <div style={{ fontSize: 54 }}>{pass ? "🐶🎉" : "🛬"}</div>
-        )}
+        <StickerImg name={heroName} glow={pass ? "rgba(52,211,153,0.7)" : "rgba(168,85,247,0.6)"} fallbackEmoji={pass ? "🐶" : "🛬"} width={180} maxHeight={200} rotate={-2} />
         <div style={{ fontSize: 54, fontWeight: 900, marginTop: 12, color: pass ? C.correct : C.accentLight, lineHeight: 1 }}>{pct}%</div>
         <p style={{ margin: "6px 0 0", fontSize: 15, color: C.textMuted }}>{correct} / {answered.length} correct</p>
         <p style={{ margin: "10px auto 0", fontSize: 15, fontWeight: 700, color: pass ? "#a7f3d0" : C.accentLight, maxWidth: 300, lineHeight: 1.4 }}>{heroMsg}</p>
@@ -350,6 +413,7 @@ function Stat({ label, value, color }: any) {
   );
 }
 
+
 // ─────────────────── REVIEW ───────────────────
 function Review({ answers, filter, setFilter, bm, toggleBm, back }: any) {
   const letters = "ABCDEF";
@@ -394,6 +458,63 @@ function Review({ answers, filter, setFilter, bm, toggleBm, back }: any) {
         ))}
         {!list.length && <div style={{ textAlign: "center", color: C.textMuted, padding: 40, fontSize: 14 }}>Nothing here.</div>}
       </div>
+    </div>
+  );
+}
+
+// ─────────────────── FLIGHT LOG (history) ───────────────────
+function FlightLog({ back }: { back: () => void }) {
+  const [log, setLog] = useState<LogEntry[]>([]);
+  useEffect(() => { setLog(LOG.get()); }, []);
+
+  const best = log.length ? Math.max(...log.map((e) => e.score)) : 0;
+  const avg = log.length ? Math.round(log.reduce((s, e) => s + e.score, 0) / log.length) : 0;
+
+  const fmt = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " · " +
+           d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  };
+  const modeLabel = (m: string) => m === "exam" ? "Check ride" : m === "bookmarks" ? "Flagged" : "Practice";
+  const clearAll = () => { if (confirm("Clear all flight log history?")) { LOG.clear(); setLog([]); } };
+
+  return (
+    <div style={{ minHeight: "100vh", background: `radial-gradient(120% 50% at 50% 0%, ${C.bg2}, ${C.bg})`, color: C.text, paddingBottom: 40 }}>
+      <div style={{ background: C.card, padding: "12px 16px", borderBottom: `1px solid ${C.cardBorder}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button onClick={back} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 26, cursor: "pointer" }}>‹</button>
+          <span style={{ fontSize: 16, fontWeight: 800 }}>🛩️ Flight log</span>
+        </div>
+        {log.length > 0 && <button onClick={clearAll} style={{ background: "none", border: "none", color: C.textMuted, fontSize: 13, cursor: "pointer" }}>Clear</button>}
+      </div>
+
+      {log.length === 0 ? (
+        <div style={{ textAlign: "center", color: C.textMuted, padding: "60px 30px", fontSize: 14, lineHeight: 1.6 }}>
+          No flights logged yet, Captain {PILOT}.<br />Finish a session and it&apos;ll show up here with the date and score. ✈️
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, padding: "14px 16px 4px" }}>
+            <Stat label="Flights" value={log.length} color={C.accentLight} />
+            <Stat label="Best" value={best} color={C.correct} />
+            <Stat label="Average" value={avg} color={C.gold} />
+          </div>
+          <div style={{ padding: "8px 16px 0", display: "flex", flexDirection: "column", gap: 10 }}>
+            {log.map((e, i) => {
+              const col = e.score >= 75 ? C.correct : e.score >= 50 ? C.gold : C.wrong;
+              return (
+                <div key={i} style={{ background: C.card, borderRadius: 13, border: `1px solid ${C.cardBorder}`, padding: "13px 15px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{fmt(e.date)}</div>
+                    <div style={{ fontSize: 12, color: C.textMuted, marginTop: 3 }}>{modeLabel(e.mode)} · {e.correct}/{e.answered} correct</div>
+                  </div>
+                  <div style={{ fontSize: 26, fontWeight: 900, color: col }}>{e.score}%</div>
+                </div>
+              );
+            })}
+                  </div>
+        </>
+      )}
     </div>
   );
 }
