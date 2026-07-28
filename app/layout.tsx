@@ -10,7 +10,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: "#1e3a5f",
+  themeColor: "#7c3aed",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -22,7 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="apple-mobile-web-app-title" content="A320 MCQ" />
         <link rel="apple-touch-icon" href="/icon-192.png" />
       </head>
-      <body style={{ margin: 0, padding: 0, fontFamily: "'Inter', -apple-system, sans-serif", background: "#0f1c2e" }}>
+      <body style={{ margin: 0, padding: 0, fontFamily: "'Inter', -apple-system, sans-serif", background: "#12091f" }}>
         {children}
       </body>
     </html>
